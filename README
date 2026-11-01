@@ -1,0 +1,199 @@
+# IT Job Market Analysis
+
+End-to-end data project that scrapes IT job postings, stores them in PostgreSQL, extracts the skills mentioned in each description with NLP, and exposes everything through a REST API and an interactive React dashboard.
+
+```
+ Job sites / APIs         Scrapy spiders           PostgreSQL            FastAPI             React dashboard
+┌────────────────┐      ┌───────────────┐      ┌─────────────┐      ┌────────────┐      ┌──────────────────┐
+│ Adzuna API     │      │ adzuna        │      │             │      │ /jobs      │      │ Overview (KPIs)  │
+│ Remotive       │ ───▶ │ remotive      │ ───▶ │  jobs table │ ───▶ │ /stats/*   │ ───▶ │ Jobs (search)    │
+│ Bayt, Indeed   │      │ bayt_it       │      │             │      │            │      │ Skills (charts)  │
+└────────────────┘      │ indeed        │      └──────▲──────┘      └────────────┘      └──────────────────┘
+                        └───────────────┘             │
+                                              spaCy skill extraction
+                                              (ml/backfill_skills.py)
+```
+
+## Features
+
+- **Multi-source scraping** with Scrapy: Adzuna (REST API, 5 countries × 13 IT keywords), Remotive, Bayt and Indeed (Playwright for JS-rendered pages).
+- **Deduplication** at two levels: a hash-based CSV pipeline and a `UNIQUE (titre, entreprise, date_publication)` constraint in PostgreSQL.
+- **Skill extraction** with a spaCy `EntityRuler` driven by an editable taxonomy (`ml/skills_taxonomy.json`: languages, cloud, DevOps, data, ML, frontend, …).
+- **REST API** (FastAPI) with filtering, pagination and aggregate statistics.
+- **Dashboard** (React + Vite + Recharts) with KPI cards, charts by country / contract type / date, top companies and top skills, and a searchable job list.
+- **CI** with GitHub Actions (pytest on every push and pull request).
+
+## Tech stack
+
+| Layer | Tools |
+|---|---|
+| Scraping | Scrapy, scrapy-playwright, scrapy-user-agents |
+| Storage | PostgreSQL, SQLAlchemy, psycopg2 |
+| NLP | spaCy (rule-based entity matching) |
+| API | FastAPI, Uvicorn, Pydantic |
+| Frontend | React 19, Vite, React Router, Recharts, Axios |
+| Tooling | pytest, GitHub Actions, oxlint |
+
+## Project structure
+
+```
+Market_Analysis/
+├── api/                      # FastAPI application
+│   ├── main.py               # App, CORS, routers
+│   ├── database.py           # SQLAlchemy engine/session (reads .env)
+│   ├── models.py             # Job model
+│   ├── export_jobs.py        # Dump the jobs table to jobs_export.csv
+│   └── routers/
+│       ├── jobs.py           # /jobs endpoints
+│       └── stats.py          # /stats endpoints
+├── job_market_analyzer/      # Scrapy project
+│   ├── scrapy.cfg
+│   └── job_market_analyzer/
+│       ├── items.py
+│       ├── pipelines.py      # CSV dedup pipeline + PostgreSQL pipeline
+│       ├── settings.py
+│       └── spiders/          # adzuna, remotive, bayt_it, indeed
+├── ml/
+│   ├── skills_taxonomy.json  # Skill categories and keywords
+│   ├── skill_extractor.py    # spaCy EntityRuler
+│   └── backfill_skills.py    # Fills jobs.skills for existing rows
+├── dashboard/                # React + Vite frontend
+│   └── src/{api,components,pages}
+├── tests/test_jobs.py
+├── .github/workflows/ci.yml
+├── run_adzuna.bat            # Windows helper to run the Adzuna spider and log output
+└── requirements.txt
+```
+
+## Getting started
+
+### Prerequisites
+
+- Python 3.12
+- Node.js 18+ and npm
+- PostgreSQL
+- An [Adzuna API](https://developer.adzuna.com/) app ID and key (for the Adzuna spider)
+
+### 1. Clone and install the backend
+
+```bash
+git clone https://github.com/<your-username>/<your-repo>.git
+cd <your-repo>
+
+python -m venv venv
+# Windows:  venv\Scripts\activate
+# macOS/Linux:  source venv/bin/activate
+
+pip install -r requirements.txt
+playwright install chromium
+```
+
+### 2. Configure the database
+
+Create a PostgreSQL database, then copy `.env.example` to `.env` at the project root and fill in your values:
+
+```bash
+cp .env.example .env     # Windows: copy .env.example .env
+```
+
+```env
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=job_market
+DB_USER=postgres
+DB_PASSWORD=your_password
+
+ADZUNA_APP_ID=your_adzuna_app_id
+ADZUNA_APP_KEY=your_adzuna_app_key
+```
+
+Both the API and the Scrapy project read these variables, so no credentials live in the code.
+
+The `jobs` table is created automatically by the Scrapy pipeline on the first run. The skills feature needs one extra column, which you add once:
+
+```sql
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS skills TEXT[];
+```
+
+### 3. Scrape job postings
+
+```bash
+cd job_market_analyzer
+scrapy crawl adzuna      # also available: remotive, bayt_it, indeed
+```
+
+Results are written to a deduplicated CSV and inserted into PostgreSQL.
+
+### 4. Extract skills
+
+From the project root:
+
+```bash
+python -m ml.backfill_skills
+```
+
+### 5. Run the API
+
+```bash
+uvicorn api.main:app --reload
+```
+
+- API: http://localhost:8000
+- Interactive docs (Swagger): http://localhost:8000/docs
+
+### 6. Run the dashboard
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. The dashboard expects the API at `http://localhost:8000` (see `dashboard/src/api/index.js`).
+
+## API reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/` | Health check |
+| GET | `/jobs/` | Paginated job list. Query params: `country`, `contrat`, `experience`, `search`, `limit` (max 100), `offset` |
+| GET | `/jobs/{id}` | Full details of one job |
+| GET | `/stats/overview` | Totals: jobs, companies, countries, senior roles, remote roles |
+| GET | `/stats/by-country` | Job count per source country |
+| GET | `/stats/by-contract` | Job count per contract type |
+| GET | `/stats/top-skills?limit=15` | Most requested skills |
+| GET | `/stats/top-companies` | Top 10 hiring companies |
+| GET | `/stats/by-date` | Postings per publication date (last 30 dates) |
+
+Example:
+
+```bash
+curl "http://localhost:8000/jobs/?search=python&experience=Senior&limit=5"
+```
+
+## Testing
+
+```bash
+pip install pytest
+pytest
+```
+
+The tests use FastAPI's `TestClient` against the configured database, so a reachable PostgreSQL instance with the `jobs` table (and the `.env` file) is required.
+
+## Customization
+
+- **Add or change tracked skills:** edit `ml/skills_taxonomy.json`, then re-run `python -m ml.backfill_skills`.
+- **Change countries or search keywords:** edit `COUNTRIES` and `IT_KEYWORDS` in `job_market_analyzer/job_market_analyzer/spiders/adzuna_spider.py`.
+- **Automate scraping on Windows:** adapt the paths in `run_adzuna.bat` and schedule it with Task Scheduler.
+
+## Roadmap
+
+- Docker Compose setup (PostgreSQL + API + dashboard)
+- Salary extraction and trend analysis over time
+- Skill co-occurrence and role clustering
+- Deployment (API + dashboard)
+
+
+## Author
+
+**Sarra Ben Bettaieb** — Data Science & AI engineering student at Tek-Up University, Tunisia.

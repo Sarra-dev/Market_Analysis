@@ -1,0 +1,9 @@
+{
+  "languages": ["Python", "Java", "JavaScript", "TypeScript", "C++", "Go", "SQL"],
+  "cloud": ["AWS", "Azure", "GCP"],
+  "devops": ["Docker", "Kubernetes", "Terraform", "Jenkins", "CI/CD"],
+  "data": ["Spark", "Airflow", "Databricks", "Snowflake", "Kafka", "Hadoop"],
+  "ml": ["Machine Learning", "Deep Learning", "TensorFlow", "PyTorch", "scikit-learn", "LLM", "NLP"],
+  "frontend": ["React", "Vue", "Angular"],
+  "databases": ["PostgreSQL", "MySQL", "MongoDB", "Redis"]
+}
